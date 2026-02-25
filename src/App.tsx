@@ -5,22 +5,22 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Shield, Target, Zap, Play, RotateCcw, Home, Heart } from 'lucide-react';
+import { Play, RotateCcw, Home, Heart, Coins, ShieldAlert, Ghost, Zap } from 'lucide-react';
 
 // --- Constants ---
 const GAME_WIDTH = 375;
 const GAME_HEIGHT = 667;
+const PLAYER_X = 60;
+const GROUND_Y = 500;
 const PLAYER_SIZE = 40;
-const ENEMY_SIZE = 35;
-const BULLET_SIZE = 8;
-const PLAYER_SPEED = 5;
-const ENEMY_SPEED = 1.5;
-const BULLET_SPEED = 7;
-const ENEMY_SPAWN_RATE = 2000; // ms
-const ENEMY_SHOOT_RATE = 3000; // ms
-const WIN_SCORE = 10;
+const JUMP_FORCE = 15;
+const GRAVITY = 0.8;
+const BASE_SPEED = 5;
+const OBSTACLE_SPAWN_RATE = 1500; // ms
+const ITEM_SPAWN_RATE = 4000; // ms
 
-type GameState = 'MENU' | 'PLAYING' | 'WON' | 'LOST';
+type GameState = 'MENU' | 'PLAYING' | 'GAMEOVER';
+type PlayerAction = 'RUNNING' | 'JUMPING' | 'CROUCHING';
 
 interface Entity {
   id: number;
@@ -28,133 +28,133 @@ interface Entity {
   y: number;
   width: number;
   height: number;
-}
-
-interface Bullet extends Entity {
-  owner: 'player' | 'enemy';
-}
-
-interface Enemy extends Entity {
-  lastShot: number;
+  type: 'obstacle' | 'coin' | 'heart' | 'invincible';
+  subType?: 'ground' | 'air';
 }
 
 export default function App() {
   const [gameState, setGameState] = useState<GameState>('MENU');
   const [score, setScore] = useState(0);
-  const [health, setHealth] = useState(3);
-  const [playerPos, setPlayerPos] = useState({ x: GAME_WIDTH / 2 - PLAYER_SIZE / 2, y: GAME_HEIGHT - 100 });
+  const [lives, setLives] = useState(3);
+  const [isInvincible, setIsInvincible] = useState(false);
+  const [, setTick] = useState(0); // Used to force re-render every frame
   
   const gameLoopRef = useRef<number>(0);
-  const enemiesRef = useRef<Enemy[]>([]);
-  const bulletsRef = useRef<Bullet[]>([]);
-  const lastEnemySpawnRef = useRef<number>(0);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const playerYRef = useRef(GROUND_Y - PLAYER_SIZE);
+  const playerActionRef = useRef<PlayerAction>('RUNNING');
+  const entitiesRef = useRef<Entity[]>([]);
+  const lastObstacleSpawnRef = useRef<number>(0);
+  const lastItemSpawnRef = useRef<number>(0);
+  const velocityRef = useRef(0);
   const nextIdRef = useRef(0);
+  const speedRef = useRef(BASE_SPEED);
 
   // --- Game Logic ---
 
-  const spawnEnemy = useCallback((time: number) => {
-    if (time - lastEnemySpawnRef.current > ENEMY_SPAWN_RATE) {
-      const newEnemy: Enemy = {
+  const spawnObstacle = useCallback((time: number) => {
+    if (time - lastObstacleSpawnRef.current > OBSTACLE_SPAWN_RATE) {
+      const isAir = Math.random() > 0.5;
+      const newObstacle: Entity = {
         id: nextIdRef.current++,
-        x: Math.random() * (GAME_WIDTH - ENEMY_SIZE),
-        y: -ENEMY_SIZE,
-        width: ENEMY_SIZE,
-        height: ENEMY_SIZE,
-        lastShot: time,
+        x: GAME_WIDTH + 50,
+        y: isAir ? GROUND_Y - 80 : GROUND_Y - 40,
+        width: 30,
+        height: 40,
+        type: 'obstacle',
+        subType: isAir ? 'air' : 'ground',
       };
-      enemiesRef.current.push(newEnemy);
-      lastEnemySpawnRef.current = time;
+      entitiesRef.current.push(newObstacle);
+      lastObstacleSpawnRef.current = time;
+    }
+  }, []);
+
+  const spawnItem = useCallback((time: number) => {
+    if (time - lastItemSpawnRef.current > ITEM_SPAWN_RATE) {
+      const rand = Math.random();
+      let type: Entity['type'] = 'coin';
+      if (rand > 0.8) type = 'heart';
+      else if (rand > 0.9) type = 'invincible';
+
+      const newItem: Entity = {
+        id: nextIdRef.current++,
+        x: GAME_WIDTH + 50,
+        y: GROUND_Y - 60 - Math.random() * 100,
+        width: 30,
+        height: 30,
+        type: type,
+      };
+      entitiesRef.current.push(newItem);
+      lastItemSpawnRef.current = time;
     }
   }, []);
 
   const update = useCallback((time: number) => {
     if (gameState !== 'PLAYING') return;
 
-    spawnEnemy(time);
+    spawnObstacle(time);
+    spawnItem(time);
 
-    // Update Bullets
-    bulletsRef.current = bulletsRef.current
-      .map(b => ({ ...b, y: b.owner === 'player' ? b.y - BULLET_SPEED : b.y + BULLET_SPEED }))
-      .filter(b => b.y > -20 && b.y < GAME_HEIGHT + 20);
+    // Update Speed
+    speedRef.current += 0.0005;
 
-    // Update Enemies
-    enemiesRef.current = enemiesRef.current.map(e => {
-      // Enemy shooting logic
-      if (time - e.lastShot > ENEMY_SHOOT_RATE) {
-        bulletsRef.current.push({
-          id: nextIdRef.current++,
-          x: e.x + ENEMY_SIZE / 2 - BULLET_SIZE / 2,
-          y: e.y + ENEMY_SIZE,
-          width: BULLET_SIZE,
-          height: BULLET_SIZE,
-          owner: 'enemy'
-        });
-        return { ...e, y: e.y + ENEMY_SPEED, lastShot: time };
+    // Update Player Physics
+    if (playerActionRef.current === 'JUMPING') {
+      velocityRef.current -= GRAVITY;
+      playerYRef.current -= velocityRef.current;
+      
+      if (playerYRef.current >= GROUND_Y - PLAYER_SIZE) {
+        playerActionRef.current = 'RUNNING';
+        velocityRef.current = 0;
+        playerYRef.current = GROUND_Y - PLAYER_SIZE;
       }
-      return { ...e, y: e.y + ENEMY_SPEED };
-    }).filter(e => e.y < GAME_HEIGHT);
+    }
+
+    // Update Entities
+    entitiesRef.current.forEach(e => {
+      e.x -= speedRef.current;
+    });
+    entitiesRef.current = entitiesRef.current.filter(e => e.x > -100);
 
     // Collision Detection
-    const playerRect = { x: playerPos.x, y: playerPos.y, width: PLAYER_SIZE, height: PLAYER_SIZE };
+    const isCrouching = playerActionRef.current === 'CROUCHING';
+    const pHeight = isCrouching ? PLAYER_SIZE / 2 : PLAYER_SIZE;
+    const pY = isCrouching ? playerYRef.current + PLAYER_SIZE / 2 : playerYRef.current;
+    const playerRect = { x: PLAYER_X, y: pY, width: PLAYER_SIZE, height: pHeight };
 
-    // Player bullets hitting enemies
-    bulletsRef.current.forEach((bullet, bIdx) => {
-      if (bullet.owner === 'player') {
-        enemiesRef.current.forEach((enemy, eIdx) => {
-          if (
-            bullet.x < enemy.x + enemy.width &&
-            bullet.x + bullet.width > enemy.x &&
-            bullet.y < enemy.y + enemy.height &&
-            bullet.y + bullet.height > enemy.y
-          ) {
-            // Hit!
-            bulletsRef.current.splice(bIdx, 1);
-            enemiesRef.current.splice(eIdx, 1);
-            setScore(s => {
-              const newScore = s + 1;
-              if (newScore >= WIN_SCORE) setGameState('WON');
-              return newScore;
+    for (let i = entitiesRef.current.length - 1; i >= 0; i--) {
+      const entity = entitiesRef.current[i];
+      if (
+        playerRect.x < entity.x + entity.width &&
+        playerRect.x + playerRect.width > entity.x &&
+        playerRect.y < entity.y + entity.height &&
+        playerRect.y + playerRect.height > entity.y
+      ) {
+        if (entity.type === 'obstacle') {
+          if (!isInvincible) {
+            setLives(l => {
+              const newLives = l - 1;
+              if (newLives <= 0) setGameState('GAMEOVER');
+              return newLives;
             });
+            entitiesRef.current.splice(i, 1);
           }
-        });
-      } else {
-        // Enemy bullets hitting player
-        if (
-          bullet.x < playerRect.x + playerRect.width &&
-          bullet.x + bullet.width > playerRect.x &&
-          bullet.y < playerRect.y + playerRect.height &&
-          bullet.y + bullet.height > playerRect.y
-        ) {
-          bulletsRef.current.splice(bIdx, 1);
-          setHealth(h => {
-            const newHealth = h - 1;
-            if (newHealth <= 0) setGameState('LOST');
-            return newHealth;
-          });
+        } else if (entity.type === 'coin') {
+          setScore(s => s + 10);
+          entitiesRef.current.splice(i, 1);
+        } else if (entity.type === 'heart') {
+          setLives(l => Math.min(3, l + 1));
+          entitiesRef.current.splice(i, 1);
+        } else if (entity.type === 'invincible') {
+          setIsInvincible(true);
+          setTimeout(() => setIsInvincible(false), 2000);
+          entitiesRef.current.splice(i, 1);
         }
       }
-    });
+    }
 
-    // Enemy body hitting player
-    enemiesRef.current.forEach((enemy, eIdx) => {
-      if (
-        enemy.x < playerRect.x + playerRect.width &&
-        enemy.x + enemy.width > playerRect.x &&
-        enemy.y < playerRect.y + playerRect.height &&
-        enemy.y + enemy.height > playerRect.y
-      ) {
-        enemiesRef.current.splice(eIdx, 1);
-        setHealth(h => {
-          const newHealth = h - 1;
-          if (newHealth <= 0) setGameState('LOST');
-          return newHealth;
-        });
-      }
-    });
-
+    setTick(t => t + 1); // Trigger re-render
     gameLoopRef.current = requestAnimationFrame(update);
-  }, [gameState, playerPos, spawnEnemy]);
+  }, [gameState, isInvincible]);
 
   useEffect(() => {
     if (gameState === 'PLAYING') {
@@ -167,93 +167,96 @@ export default function App() {
 
   // --- Controls ---
 
-  const handleTouchMove = (e: React.TouchEvent | React.MouseEvent) => {
-    if (gameState !== 'PLAYING' || !containerRef.current) return;
-    
-    const rect = containerRef.current.getBoundingClientRect();
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    
-    // Calculate relative X
-    let newX = clientX - rect.left - PLAYER_SIZE / 2;
-    
-    // Boundary check
-    newX = Math.max(0, Math.min(GAME_WIDTH - PLAYER_SIZE, newX));
-    
-    setPlayerPos(prev => ({ ...prev, x: newX }));
+  const handleJump = () => {
+    if (gameState !== 'PLAYING') return;
+    if (playerActionRef.current === 'RUNNING') {
+      playerActionRef.current = 'JUMPING';
+      velocityRef.current = JUMP_FORCE;
+    }
   };
 
-  const handleShoot = () => {
+  const handleCrouchStart = () => {
     if (gameState !== 'PLAYING') return;
-    
-    bulletsRef.current.push({
-      id: nextIdRef.current++,
-      x: playerPos.x + PLAYER_SIZE / 2 - BULLET_SIZE / 2,
-      y: playerPos.y - BULLET_SIZE,
-      width: BULLET_SIZE,
-      height: BULLET_SIZE,
-      owner: 'player'
-    });
+    if (playerActionRef.current === 'RUNNING') {
+      playerActionRef.current = 'CROUCHING';
+    }
+  };
+
+  const handleCrouchEnd = () => {
+    if (playerActionRef.current === 'CROUCHING') {
+      playerActionRef.current = 'RUNNING';
+    }
   };
 
   const startGame = () => {
     setScore(0);
-    setHealth(3);
-    setPlayerPos({ x: GAME_WIDTH / 2 - PLAYER_SIZE / 2, y: GAME_HEIGHT - 100 });
-    enemiesRef.current = [];
-    bulletsRef.current = [];
+    setLives(3);
+    playerYRef.current = GROUND_Y - PLAYER_SIZE;
+    playerActionRef.current = 'RUNNING';
+    entitiesRef.current = [];
+    speedRef.current = BASE_SPEED;
     setGameState('PLAYING');
   };
 
   return (
-    <div className="min-h-screen bg-neutral-950 flex items-center justify-center p-4 font-sans text-white overflow-hidden">
+    <div className="min-h-screen bg-sky-100 flex items-center justify-center p-4 font-sans text-slate-800 overflow-hidden select-none">
       {/* Game Container */}
       <div 
-        ref={containerRef}
-        className="relative bg-neutral-900 border border-white/10 shadow-2xl overflow-hidden rounded-2xl"
+        className="relative bg-white border-4 border-white shadow-2xl overflow-hidden rounded-[2rem]"
         style={{ width: GAME_WIDTH, height: GAME_HEIGHT }}
-        onMouseMove={handleTouchMove}
-        onTouchMove={handleTouchMove}
-        onClick={handleShoot}
+        onMouseDown={handleJump}
+        onTouchStart={handleJump}
       >
-        {/* Background Grid */}
-        <div className="absolute inset-0 opacity-20 pointer-events-none">
-          <div className="h-full w-full" style={{ 
-            backgroundImage: 'radial-gradient(circle, #3b82f6 1px, transparent 1px)', 
-            backgroundSize: '40px 40px' 
-          }} />
+        {/* Background Layers */}
+        <div className="absolute inset-0 bg-gradient-to-b from-sky-300 to-sky-100" />
+        
+        {/* Scrolling Clouds/Trees (Simplified) */}
+        <div className="absolute top-20 left-0 w-full flex justify-around opacity-40">
+          <div className="w-20 h-10 bg-white rounded-full blur-sm animate-pulse" />
+          <div className="w-24 h-12 bg-white rounded-full blur-sm animate-pulse delay-75" />
         </div>
+
+        {/* Ground */}
+        <div 
+          className="absolute bottom-0 left-0 w-full bg-emerald-400 border-t-8 border-emerald-500"
+          style={{ height: GAME_HEIGHT - GROUND_Y }}
+        />
 
         <AnimatePresence mode="wait">
           {gameState === 'MENU' && (
             <motion.div 
               key="menu"
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 1.1 }}
-              className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm z-50 p-8 text-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 flex flex-col items-center justify-center bg-white/40 backdrop-blur-md z-50 p-8 text-center"
             >
-              <div className="mb-8 relative">
-                <motion.div 
-                  animate={{ rotate: 360 }}
-                  transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-                  className="absolute -inset-4 border border-blue-500/30 rounded-full"
-                />
-                <Target className="w-20 h-20 text-blue-500" />
-              </div>
-              <h1 className="text-4xl font-bold tracking-tighter mb-2 uppercase">Mecha Strike</h1>
-              <p className="text-blue-400/70 text-sm mb-8 font-mono tracking-widest">SYSTEM ONLINE // VER 1.0</p>
-              
-              <div className="space-y-4 w-full">
-                <button 
-                  onClick={startGame}
-                  className="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-lg shadow-blue-600/20"
-                >
-                  <Play className="w-5 h-5 fill-current" />
-                  START MISSION
-                </button>
-                <div className="text-xs text-white/40 font-mono">
-                  SLIDE TO MOVE • TAP TO SHOOT
+              <motion.div 
+                animate={{ y: [0, -10, 0] }}
+                transition={{ repeat: Infinity, duration: 2 }}
+                className="mb-6"
+              >
+                <div className="w-24 h-24 bg-amber-300 rounded-2xl border-4 border-amber-400 flex items-center justify-center shadow-lg">
+                  <div className="w-12 h-12 bg-slate-800 rounded-full flex items-center justify-center">
+                    <div className="w-2 h-2 bg-white rounded-full translate-x-1 -translate-y-1" />
+                  </div>
                 </div>
+              </motion.div>
+              
+              <h1 className="text-4xl font-black text-emerald-600 tracking-tight mb-2 uppercase">Tiny Runner</h1>
+              <p className="text-slate-500 text-sm mb-8 font-medium">DASH THROUGH THE FOREST!</p>
+              
+              <button 
+                onClick={(e) => { e.stopPropagation(); startGame(); }}
+                className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-white rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-emerald-500/30"
+              >
+                <Play className="w-6 h-6 fill-current" />
+                START DASH
+              </button>
+              
+              <div className="mt-8 grid grid-cols-2 gap-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                <div>TAP TO JUMP</div>
+                <div>HOLD TO CROUCH</div>
               </div>
             </motion.div>
           )}
@@ -267,101 +270,124 @@ export default function App() {
                     {[...Array(3)].map((_, i) => (
                       <Heart 
                         key={i} 
-                        className={`w-5 h-5 ${i < health ? 'text-red-500 fill-red-500' : 'text-white/20'}`} 
+                        className={`w-6 h-6 ${i < lives ? 'text-rose-500 fill-rose-500' : 'text-slate-200'}`} 
                       />
                     ))}
                   </div>
-                  <div className="text-[10px] font-mono text-blue-400 uppercase tracking-widest">Armor Integrity</div>
                 </div>
                 
-                <div className="text-right">
-                  <div className="text-3xl font-bold font-mono leading-none">{score.toString().padStart(2, '0')}</div>
-                  <div className="text-[10px] font-mono text-blue-400 uppercase tracking-widest">Targets Neutralized</div>
+                <div className="bg-white/80 backdrop-blur-sm px-4 py-2 rounded-full shadow-sm flex items-center gap-2 border border-slate-100">
+                  <Coins className="w-4 h-4 text-amber-500" />
+                  <span className="text-xl font-black font-mono text-slate-700">{score}</span>
                 </div>
               </div>
 
               {/* Player */}
-              <motion.div 
-                className="absolute z-30"
-                animate={{ x: playerPos.x, y: playerPos.y }}
-                transition={{ type: 'spring', damping: 20, stiffness: 300 }}
+              <div 
+                className="absolute z-30 transition-transform duration-75 ease-out"
+                style={{ 
+                  left: PLAYER_X,
+                  transform: `translate3d(0, ${playerYRef.current}px, 0) scaleY(${playerActionRef.current === 'CROUCHING' ? 0.6 : 1}) rotate(${playerActionRef.current === 'JUMPING' ? 10 : 0}deg)`
+                }}
               >
-                <div className="relative">
-                  <Zap className="w-10 h-10 text-blue-400 fill-blue-400/20" />
-                  <motion.div 
-                    animate={{ opacity: [0.2, 0.5, 0.2] }}
-                    transition={{ repeat: Infinity, duration: 1 }}
-                    className="absolute -inset-2 bg-blue-500/20 blur-xl rounded-full"
-                  />
+                <div className={`relative w-10 h-10 rounded-xl border-4 transition-colors ${isInvincible ? 'bg-amber-300 border-amber-400' : 'bg-sky-400 border-sky-500'}`}>
+                  <div className="absolute top-2 right-2 w-3 h-3 bg-slate-800 rounded-full">
+                    <div className="w-1 h-1 bg-white rounded-full translate-x-1" />
+                  </div>
+                  {isInvincible && (
+                    <motion.div 
+                      animate={{ opacity: [0, 1, 0] }}
+                      transition={{ repeat: Infinity, duration: 0.5 }}
+                      className="absolute -inset-2 border-2 border-amber-400 rounded-2xl"
+                    />
+                  )}
                 </div>
-              </motion.div>
+              </div>
 
-              {/* Enemies */}
-              {enemiesRef.current.map(enemy => (
+              {/* Entities */}
+              {entitiesRef.current.map(entity => (
                 <div 
-                  key={enemy.id}
-                  className="absolute z-20"
-                  style={{ left: enemy.x, top: enemy.y }}
-                >
-                  <Shield className="w-9 h-9 text-neutral-500 fill-neutral-500/20 rotate-180" />
-                </div>
-              ))}
-
-              {/* Bullets */}
-              {bulletsRef.current.map(bullet => (
-                <div 
-                  key={bullet.id}
-                  className={`absolute rounded-full z-10 ${bullet.owner === 'player' ? 'bg-blue-400 shadow-[0_0_10px_#60a5fa]' : 'bg-red-500 shadow-[0_0_10px_#ef4444]'}`}
+                  key={entity.id}
+                  className="absolute z-20 flex items-center justify-center will-change-transform"
                   style={{ 
-                    left: bullet.x, 
-                    top: bullet.y, 
-                    width: bullet.width, 
-                    height: bullet.height 
+                    width: entity.width, 
+                    height: entity.height,
+                    transform: `translate3d(${entity.x}px, ${entity.y}px, 0)`
                   }}
-                />
+                >
+                  {entity.type === 'obstacle' && (
+                    <div className={`w-full h-full rounded-lg flex items-center justify-center ${entity.subType === 'air' ? 'bg-slate-700' : 'bg-orange-700'}`}>
+                      {entity.subType === 'air' ? <Ghost className="w-6 h-6 text-white" /> : <ShieldAlert className="w-6 h-6 text-white" />}
+                    </div>
+                  )}
+                  {entity.type === 'coin' && (
+                    <motion.div 
+                      animate={{ rotateY: 360 }}
+                      transition={{ repeat: Infinity, duration: 2, ease: "linear" }}
+                      className="w-8 h-8 bg-amber-400 border-4 border-amber-500 rounded-full flex items-center justify-center shadow-sm"
+                    >
+                      <span className="text-[10px] font-black text-amber-700">$</span>
+                    </motion.div>
+                  )}
+                  {entity.type === 'heart' && (
+                    <Heart className="w-8 h-8 text-rose-500 fill-rose-500 animate-bounce" />
+                  )}
+                  {entity.type === 'invincible' && (
+                    <div className="w-8 h-8 bg-amber-200 border-4 border-amber-400 rounded-lg flex items-center justify-center">
+                      <Zap className="w-5 h-5 text-amber-600 fill-amber-600" />
+                    </div>
+                  )}
+                </div>
               ))}
+
+              {/* Controls Overlay (Invisible) */}
+              <div className="absolute inset-0 pointer-events-auto flex flex-col">
+                <div className="flex-1" onMouseDown={handleJump} onTouchStart={handleJump} />
+                <div 
+                  className="h-1/3" 
+                  onMouseDown={handleCrouchStart} 
+                  onMouseUp={handleCrouchEnd}
+                  onMouseLeave={handleCrouchEnd}
+                  onTouchStart={handleCrouchStart}
+                  onTouchEnd={handleCrouchEnd}
+                />
+              </div>
             </div>
           )}
 
-          {(gameState === 'WON' || gameState === 'LOST') && (
+          {gameState === 'GAMEOVER' && (
             <motion.div 
-              key="end"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md z-50 p-8 text-center"
+              key="gameover"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="absolute inset-0 flex flex-col items-center justify-center bg-white/90 backdrop-blur-md z-50 p-8 text-center"
             >
-              <h2 className={`text-5xl font-black mb-2 uppercase tracking-tighter ${gameState === 'WON' ? 'text-blue-500' : 'text-red-500'}`}>
-                {gameState === 'WON' ? 'Mission Success' : 'Mission Failed'}
-              </h2>
-              <p className="text-white/60 mb-8 font-mono">
-                {gameState === 'WON' ? 'ALL TARGETS NEUTRALIZED' : 'CRITICAL SYSTEM FAILURE'}
-              </p>
+              <div className="w-20 h-20 bg-rose-100 rounded-full flex items-center justify-center mb-6">
+                <Ghost className="w-10 h-10 text-rose-500" />
+              </div>
               
-              <div className="grid grid-cols-2 gap-4 w-full mb-8">
-                <div className="bg-white/5 p-4 rounded-xl border border-white/10">
-                  <div className="text-xs text-white/40 uppercase mb-1">Score</div>
-                  <div className="text-2xl font-bold font-mono">{score}</div>
-                </div>
-                <div className="bg-white/5 p-4 rounded-xl border border-white/10">
-                  <div className="text-xs text-white/40 uppercase mb-1">Status</div>
-                  <div className="text-sm font-bold text-blue-400">{gameState === 'WON' ? 'PROMOTED' : 'REPAIRING'}</div>
-                </div>
+              <h2 className="text-4xl font-black text-slate-800 mb-2 uppercase tracking-tighter">Ouch!</h2>
+              <p className="text-slate-500 mb-8 font-medium">YOU RAN INTO SOMETHING!</p>
+              
+              <div className="bg-slate-50 p-6 rounded-[2rem] border-2 border-slate-100 w-full mb-8">
+                <div className="text-xs text-slate-400 uppercase font-bold tracking-widest mb-1">Final Score</div>
+                <div className="text-5xl font-black text-emerald-500 font-mono">{score}</div>
               </div>
 
               <div className="space-y-3 w-full">
                 <button 
-                  onClick={startGame}
-                  className="w-full py-4 bg-white text-black hover:bg-neutral-200 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95"
+                  onClick={(e) => { e.stopPropagation(); startGame(); }}
+                  className="w-full py-4 bg-emerald-500 text-white hover:bg-emerald-400 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-emerald-500/20"
                 >
                   <RotateCcw className="w-5 h-5" />
-                  RETRY MISSION
+                  TRY AGAIN
                 </button>
                 <button 
-                  onClick={() => setGameState('MENU')}
-                  className="w-full py-4 bg-transparent border border-white/20 hover:bg-white/5 rounded-xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95"
+                  onClick={(e) => { e.stopPropagation(); setGameState('MENU'); }}
+                  className="w-full py-4 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95"
                 >
                   <Home className="w-5 h-5" />
-                  RETURN TO BASE
+                  MAIN MENU
                 </button>
               </div>
             </motion.div>
@@ -369,9 +395,9 @@ export default function App() {
         </AnimatePresence>
       </div>
 
-      {/* Mobile Instructions Overlay (Optional, for desktop users to know it's mobile-first) */}
-      <div className="fixed bottom-4 left-0 right-0 text-center pointer-events-none opacity-20 hidden md:block">
-        <p className="text-[10px] font-mono uppercase tracking-[0.3em]">Optimized for Mobile Touch Controls</p>
+      {/* Mobile Hint */}
+      <div className="fixed bottom-6 text-[10px] font-bold text-slate-400 uppercase tracking-[0.3em] pointer-events-none">
+        Tap Top to Jump • Hold Bottom to Crouch
       </div>
     </div>
   );
