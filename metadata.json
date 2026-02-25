@@ -1,5 +1,5 @@
 {
-  "name": "Tiny Runner: Forest Dash",
-  "description": "A cute and simple 2D cartoon runner game. Jump and crouch to avoid obstacles in a vibrant forest setting.",
+  "name": "Mini Battle Royale",
+  "description": "A minimalist 2D top-down battle royale game. Collect weapons, defeat opponents, and survive the shrinking safe zone.",
   "requestFramePermissions": []
 }
